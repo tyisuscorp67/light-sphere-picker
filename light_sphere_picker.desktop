@@ -1,0 +1,9 @@
+[Desktop Entry]
+Type=Service
+ServiceTypes=Krita/PythonPlugin
+X-KDE-Library=light_sphere_picker
+X-Python-Version=3
+Name=Light Sphere Picker
+Name[es]=Selector Esfera de Luz
+Comment=Interactive 3D lit sphere for shading and color picking
+Comment[es]=Esfera interactiva de luz y sombra para estudio y selección de color
