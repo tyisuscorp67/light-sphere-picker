@@ -14,6 +14,7 @@ from PyQt5.QtWidgets import (
     QButtonGroup,
     QCheckBox,
     QColorDialog,
+    QComboBox,
     QHBoxLayout,
     QLabel,
     QPushButton,
@@ -24,43 +25,53 @@ from PyQt5.QtWidgets import (
 )
 from krita import DockWidget, Krita, ManagedColor
 
-# DICCIONARIO DE TRADUCCIÓN (I18N)
+# DICCIONARIO BILINGÜE
 TEXTS = {
     "es": {
         "title": "Esfera de Luz",
-        "plastic": "Plástico / Mate",
-        "skin": "Piel (Orgánico)",
+        "plastic": "Plástico / Tela",
+        "skin": "Piel (Ilustración)",
         "sync": "🔗 Sync Krita",
-        "auto_shadow": "🎨 Sombra Auto",
+        "shadow_analog": "Sombra: Ilustración (Cálida)",
+        "shadow_comp": "Sombra: Complementaria",
+        "shadow_mono": "Sombra: Monocroma",
         "custom_shadow": "Sombra...",
+        "reset_shadow": "↺ Reset",
+        "reset_tooltip": "Restablecer a sombra automática base",
         "bounce_color": "Rebote...",
         "auto_bounce": "Auto",
         "bounce_label": "Rebote:",
         "light": "Luz",
-        "mid": "Medio",
+        "base": "Base",
+        "trans": "Trans.",
         "shadow": "Sombra",
         "bounce": "Rebote",
-        "save_tooltip": "Guardar colores en el historial",
-        "tooltip_sphere": "• Arrastrar con Clic Izquierdo: Mover Luz\n• Arrastrar con Clic Derecho: Mover Rebote\n• Clic simple: Tomar color",
+        "save_tooltip": "Guardar paleta de 5 tonos en el historial",
+        "tooltip_sphere": "• Clic Izquierdo (arrastrar): Mover Luz\n• Clic Derecho (arrastrar): Mover Rebote\n• Clic simple: Tomar color",
         "picker_title_shadow": "Elegir Color de Sombra",
         "picker_title_bounce": "Elegir Color de Rebote",
     },
     "en": {
         "title": "Light Sphere",
-        "plastic": "Plastic / Matte",
-        "skin": "Skin (Organic)",
+        "plastic": "Plastic / Fabric",
+        "skin": "Skin (Illustration)",
         "sync": "🔗 Sync Krita",
-        "auto_shadow": "🎨 Auto Shadow",
+        "shadow_analog": "Shadow: Illustration (Warm)",
+        "shadow_comp": "Shadow: Complementary",
+        "shadow_mono": "Shadow: Monochromatic",
         "custom_shadow": "Shadow...",
+        "reset_shadow": "↺ Reset",
+        "reset_tooltip": "Reset to base automatic shadow",
         "bounce_color": "Bounce...",
         "auto_bounce": "Auto",
         "bounce_label": "Bounce:",
         "light": "Light",
-        "mid": "Mid",
+        "base": "Base",
+        "trans": "Trans.",
         "shadow": "Shadow",
         "bounce": "Bounce",
-        "save_tooltip": "Save colors to history",
-        "tooltip_sphere": "• Left Click Drag: Move Light\n• Right Click Drag: Move Bounce\n• Click: Pick color",
+        "save_tooltip": "Save 5-tone palette to history",
+        "tooltip_sphere": "• Left Drag: Move Light\n• Right Drag: Move Bounce\n• Click: Pick color",
         "picker_title_shadow": "Select Shadow Color",
         "picker_title_bounce": "Select Bounce Color",
     },
@@ -77,23 +88,48 @@ class LitSphereView(QWidget):
         self.ly = -0.55
         self.bx = 0.60
         self.by = 0.70
-        self.bounce_intensity = 60
+        self.bounce_intensity = 55
         self.auto_bounce = True
 
-        self.base_color = QColor(230, 180, 140)
-        self.bounce_color = QColor(130, 175, 235)
+        self.base_color = QColor(225, 180, 145)
+        self.bounce_color = QColor(135, 170, 220)
         self.custom_shadow_color = None
-        self.use_complementary_shadow = True
 
-        self.material = "plastico"
+        self.shadow_mode = "analoga"
+        self.material = "piel"
 
         self.dragging_light = False
         self.dragging_bounce = False
         self.press_pos = None
         self.has_dragged = False
 
+    def get_transition_color(self):
+        """Calcula el tono de borde vivo/cálido entre la luz y la sombra"""
+        h = self.base_color.hue()
+        if h < 0:
+            h = 0
+        s = self.base_color.saturation()
+        v = self.base_color.value()
+
+        # En piel y tonos cálidos, satura e intensifica hacia el carmín/naranja vivo
+        if 10 <= h <= 65:
+            trans_h = (h - 12) % 360
+            trans_s = min(255, int(s * 1.35 + 25))
+            trans_v = int(v * 0.82)
+        elif 65 < h <= 170:  # Verdes
+            trans_h = (h - 10) % 360
+            trans_s = min(255, int(s * 1.25 + 20))
+            trans_v = int(v * 0.78)
+        else:  # Azules y fríos
+            trans_h = (h + 10) % 360
+            trans_s = min(255, int(s * 1.20 + 20))
+            trans_v = int(v * 0.80)
+
+        return QColor.fromHsv(trans_h, trans_s, trans_v)
+
     def get_shadow_color(self):
-        if not self.use_complementary_shadow and self.custom_shadow_color:
+        """Calcula la sombra con cuerpo terroso como en la ilustración del usuario"""
+        if self.custom_shadow_color:
             return self.custom_shadow_color
 
         h = self.base_color.hue()
@@ -102,13 +138,37 @@ class LitSphereView(QWidget):
         s = self.base_color.saturation()
         v = self.base_color.value()
 
-        if self.use_complementary_shadow:
+        if self.shadow_mode == "analoga":
+            # Estilo Bárbaro: sombras con cuerpo castaño/terracota sólido
+            if 10 <= h <= 65:
+                shift = -18  # Hacia castaño/carmín profundo
+                new_s = min(255, int(s * 1.15 + 30))
+                new_v = int(v * 0.48)
+            elif 65 < h <= 170:  # Capa verde -> verde bosque profundo
+                shift = 20
+                new_s = min(255, int(s * 1.10 + 25))
+                new_v = int(v * 0.40)
+            elif 170 < h <= 255:  # Pantalón azul/gris -> carbón azulado profundo
+                shift = -20
+                new_s = min(255, int(s * 1.10 + 15))
+                new_v = int(v * 0.38)
+            else:
+                shift = -15
+                new_s = min(255, int(s * 1.15 + 20))
+                new_v = int(v * 0.42)
+
+            new_h = (h + shift) % 360
+            return QColor.fromHsv(new_h, new_s, new_v)
+
+        elif self.shadow_mode == "complementaria":
             comp_h = (h + 160) % 360
-            comp_s = min(255, int(s * 1.15 + 25))
+            comp_s = min(255, int(s * 1.15 + 20))
             comp_v = int(v * 0.38)
             return QColor.fromHsv(comp_h, comp_s, comp_v)
         else:
-            return self.base_color.darker(260)
+            new_s = min(255, int(s * 1.20 + 10))
+            new_v = int(v * 0.40)
+            return QColor.fromHsv(h, new_s, new_v)
 
     def mousePressEvent(self, event):
         self.press_pos = event.pos()
@@ -200,7 +260,7 @@ class LitSphereView(QWidget):
         cx, cy = w / 2, h / 2 - 8
         r = min(w, h) * 0.36
 
-        # Sombra proyectada
+        # Sombra en suelo
         shadow_ox = cx - (self.lx * r * 0.65)
         shadow_oy = cy + r + 10
         shadow_w = r * 1.65 + abs(self.lx) * 20
@@ -225,13 +285,13 @@ class LitSphereView(QWidget):
         painter.setClipPath(clip_path)
 
         if self.material == "piel":
-            self._render_skin(painter, cx, cy, r)
+            self._render_skin_illust(painter, cx, cy, r)
         else:
             self._render_plastic(painter, cx, cy, r)
 
         painter.restore()
 
-        # Oclusión perimetral (Fresnel)
+        # Oclusión perimetral (Fresnel suave)
         fresnel = QRadialGradient(cx, cy, r)
         fresnel.setColorAt(0.0, QColor(0, 0, 0, 0))
         fresnel.setColorAt(0.85, QColor(0, 0, 0, 0))
@@ -268,9 +328,7 @@ class LitSphereView(QWidget):
             col = QColor(self.bounce_color)
             col.setAlpha(alpha)
             b_grad.setColorAt(0.0, col)
-            col_t = QColor(self.bounce_color)
-            col_t.setAlpha(0)
-            b_grad.setColorAt(0.65, col_t)
+            b_grad.setColorAt(0.65, QColor(col.red(), col.green(), col.blue(), 0))
             p.setBrush(QBrush(b_grad))
             p.drawRect(self.rect())
 
@@ -283,26 +341,23 @@ class LitSphereView(QWidget):
         p.setBrush(QBrush(spec))
         p.drawRect(self.rect())
 
-    def _render_skin(self, p, cx, cy, r):
+    def _render_skin_illust(self, p, cx, cy, r):
+        """Renderizado con la banda de transición visible como en la ilustración"""
         lx_pos = cx + self.lx * r * 0.74
         ly_pos = cy + self.ly * r * 0.74
 
         diffuse = QRadialGradient(lx_pos, ly_pos, r * 1.60)
-        diffuse.setColorAt(0.0, self.base_color.lighter(120))
-        diffuse.setColorAt(0.35, self.base_color)
+        diffuse.setColorAt(0.0, self.base_color.lighter(125))
+        diffuse.setColorAt(0.34, self.base_color)
 
-        h = self.base_color.hue()
-        if h < 0:
-            h = 0
-        warm_shadow = QColor.fromHsv(
-            (h - 10) % 360,
-            min(255, int(self.base_color.saturation() * 1.15 + 15)),
-            int(self.base_color.value() * 0.55),
-        )
-        diffuse.setColorAt(0.68, warm_shadow)
+        # Banda de transición viva (Terminador cálido)
+        trans_col = self.get_transition_color()
+        diffuse.setColorAt(0.55, trans_col)
 
+        # Sombra con cuerpo
         shadow_col = self.get_shadow_color()
-        diffuse.setColorAt(1.0, shadow_col)
+        diffuse.setColorAt(0.82, shadow_col)
+        diffuse.setColorAt(1.0, shadow_col.darker(120))
 
         p.setBrush(QBrush(diffuse))
         p.setPen(Qt.NoPen)
@@ -316,18 +371,17 @@ class LitSphereView(QWidget):
             col = QColor(self.bounce_color)
             col.setAlpha(alpha)
             b_grad.setColorAt(0.0, col)
-            col_t = QColor(self.bounce_color)
-            col_t.setAlpha(0)
-            b_grad.setColorAt(0.70, col_t)
+            b_grad.setColorAt(0.70, QColor(col.red(), col.green(), col.blue(), 0))
             p.setBrush(QBrush(b_grad))
             p.drawRect(self.rect())
 
-        spec_x = cx + self.lx * r * 0.80
-        spec_y = cy + self.ly * r * 0.80
-        spec = QRadialGradient(spec_x, spec_y, r * 0.28)
-        spec.setColorAt(0.0, QColor(255, 245, 235, 140))
-        spec.setColorAt(0.45, QColor(255, 235, 220, 50))
-        spec.setColorAt(1.0, QColor(255, 235, 220, 0))
+        # Brillo suave de ilustración
+        spec_x = cx + self.lx * r * 0.78
+        spec_y = cy + self.ly * r * 0.78
+        spec = QRadialGradient(spec_x, spec_y, r * 0.25)
+        spec.setColorAt(0.0, QColor(255, 248, 240, 150))
+        spec.setColorAt(0.50, QColor(255, 240, 225, 45))
+        spec.setColorAt(1.0, QColor(255, 240, 225, 0))
         p.setBrush(QBrush(spec))
         p.drawRect(self.rect())
 
@@ -339,8 +393,6 @@ class LightSpherePickerDocker(DockWidget):
         self.last_sent_color = None
         self.ignore_sync_until = 0
 
-        # DETECCIÓN AUTOMÁTICA DEL IDIOMA
-        # Si el sistema está en español, usa 'es', para todo lo demás usa 'en'
         loc = QLocale.system().name().lower()
         self.lang = "es" if loc.startswith("es") else "en"
 
@@ -348,17 +400,17 @@ class LightSpherePickerDocker(DockWidget):
             "plastico": {
                 "base": QColor(220, 60, 110),
                 "shadow": None,
-                "use_comp": True,
+                "shadow_mode": "analoga",
                 "bounce": QColor(100, 220, 255),
                 "intensity": 60,
                 "lx": -0.50,
                 "ly": -0.55,
             },
             "piel": {
-                "base": QColor(230, 180, 140),
+                "base": QColor(225, 180, 145),
                 "shadow": None,
-                "use_comp": True,
-                "bounce": QColor(120, 160, 220),
+                "shadow_mode": "analoga",
+                "bounce": QColor(135, 170, 220),
                 "intensity": 50,
                 "lx": -0.50,
                 "ly": -0.55,
@@ -374,7 +426,6 @@ class LightSpherePickerDocker(DockWidget):
         layout.setContentsMargins(4, 4, 4, 4)
         layout.setSpacing(4)
 
-        # Barra superior con selector de idioma
         top_bar = QHBoxLayout()
         self.btn_lang = QPushButton(self.lang.upper())
         self.btn_lang.setFixedSize(28, 18)
@@ -425,35 +476,53 @@ class LightSpherePickerDocker(DockWidget):
             self.btn_group.addButton(b)
             mat_layout.addWidget(b)
 
-        self.btn_plastico.setChecked(True)
+        self.btn_piel.setChecked(True)
         self.btn_plastico.clicked.connect(
             lambda: self.switch_material("plastico")
         )
         self.btn_piel.clicked.connect(lambda: self.switch_material("piel"))
         layout.addLayout(mat_layout)
 
-        checks_row = QHBoxLayout()
-        checks_row.setSpacing(4)
+        sync_row = QHBoxLayout()
         self.chk_sync = QCheckBox()
         self.chk_sync.setChecked(True)
         self.chk_sync.setStyleSheet("font-size: 11px;")
+        sync_row.addWidget(self.chk_sync)
+        layout.addLayout(sync_row)
 
-        self.chk_comp_shadow = QCheckBox()
-        self.chk_comp_shadow.setChecked(True)
-        self.chk_comp_shadow.setStyleSheet("font-size: 11px;")
-        self.chk_comp_shadow.toggled.connect(self.on_toggle_comp_shadow)
+        self.combo_shadow = QComboBox()
+        self.combo_shadow.setStyleSheet(
+            "QComboBox { background-color: #2A2B2E; color: #EEE; border: 1px solid #444; border-radius: 3px; padding: 2px 4px; font-size: 11px; }"
+        )
+        self.combo_shadow.addItem("", "analoga")
+        self.combo_shadow.addItem("", "complementaria")
+        self.combo_shadow.addItem("", "monocroma")
+        self.combo_shadow.currentIndexChanged.connect(
+            self.on_shadow_mode_changed
+        )
+        layout.addWidget(self.combo_shadow)
 
-        checks_row.addWidget(self.chk_sync)
-        checks_row.addWidget(self.chk_comp_shadow)
-        layout.addLayout(checks_row)
-
-        adj_row = QHBoxLayout()
-        adj_row.setSpacing(3)
+        shadow_row = QHBoxLayout()
+        shadow_row.setSpacing(3)
 
         self.btn_custom_shadow = QPushButton()
         self.btn_custom_shadow.setStyleSheet(btn_style)
         self.btn_custom_shadow.clicked.connect(self.choose_custom_shadow)
 
+        self.btn_reset_shadow = QPushButton()
+        self.btn_reset_shadow.setStyleSheet(
+            btn_style
+            + "QPushButton:enabled { color: #E58B8B; } QPushButton:disabled { color: #666; }"
+        )
+        self.btn_reset_shadow.setEnabled(False)
+        self.btn_reset_shadow.clicked.connect(self.reset_shadow_to_auto)
+
+        shadow_row.addWidget(self.btn_custom_shadow)
+        shadow_row.addWidget(self.btn_reset_shadow)
+        layout.addLayout(shadow_row)
+
+        bounce_row = QHBoxLayout()
+        bounce_row.setSpacing(3)
         self.btn_bounce_col = QPushButton()
         self.btn_bounce_col.setStyleSheet(btn_style)
         self.btn_bounce_col.clicked.connect(self.choose_bounce_color)
@@ -462,10 +531,9 @@ class LightSpherePickerDocker(DockWidget):
         self.btn_auto_bounce.setStyleSheet(btn_style)
         self.btn_auto_bounce.clicked.connect(self.reset_auto_bounce)
 
-        adj_row.addWidget(self.btn_custom_shadow)
-        adj_row.addWidget(self.btn_bounce_col)
-        adj_row.addWidget(self.btn_auto_bounce)
-        layout.addLayout(adj_row)
+        bounce_row.addWidget(self.btn_bounce_col)
+        bounce_row.addWidget(self.btn_auto_bounce)
+        layout.addLayout(bounce_row)
 
         slider_row = QHBoxLayout()
         self.lbl_rebote = QLabel()
@@ -474,35 +542,41 @@ class LightSpherePickerDocker(DockWidget):
 
         self.slider_bounce = QSlider(Qt.Horizontal)
         self.slider_bounce.setRange(0, 100)
-        self.slider_bounce.setValue(60)
+        self.slider_bounce.setValue(55)
         self.slider_bounce.setFixedHeight(16)
         self.slider_bounce.valueChanged.connect(self.on_bounce_intensity_change)
         slider_row.addWidget(self.slider_bounce)
         layout.addLayout(slider_row)
 
+        # 5 MUESTRAS EN VIVO PARA PINTURA: [Luz] [Base] [Trans.] [Sombra] [Rebote]
         self.palette_row = QHBoxLayout()
-        self.palette_row.setSpacing(3)
+        self.palette_row.setSpacing(2)
 
         self.chip_light = QPushButton()
-        self.chip_mid = QPushButton()
+        self.chip_base = QPushButton()
+        self.chip_trans = QPushButton()
         self.chip_shadow = QPushButton()
         self.chip_bounce = QPushButton()
 
         for chip in [
             self.chip_light,
-            self.chip_mid,
+            self.chip_base,
+            self.chip_trans,
             self.chip_shadow,
             self.chip_bounce,
         ]:
             chip.setFixedHeight(22)
             chip.setStyleSheet(
-                "border-radius: 3px; border: 1px solid #111; font-weight: bold; font-size: 10px; color: #FFF;"
+                "border-radius: 3px; border: 1px solid #111; font-weight: bold; font-size: 9px; color: #FFF;"
             )
             self.palette_row.addWidget(chip)
 
         self.chip_light.clicked.connect(lambda: self.send_to_krita(self.col_lit))
-        self.chip_mid.clicked.connect(
+        self.chip_base.clicked.connect(
             lambda: self.send_to_krita(self.sphere.base_color)
+        )
+        self.chip_trans.clicked.connect(
+            lambda: self.send_to_krita(self.col_trans)
         )
         self.chip_shadow.clicked.connect(
             lambda: self.send_to_krita(self.col_shadow)
@@ -532,7 +606,6 @@ class LightSpherePickerDocker(DockWidget):
         self.timer.timeout.connect(self.sync_with_krita_color)
         self.timer.start(120)
 
-        # Aplicar textos del idioma actual
         self.retranslate_ui()
         self.update_live_palette()
 
@@ -551,16 +624,52 @@ class LightSpherePickerDocker(DockWidget):
         self.btn_plastico.setText(t["plastic"])
         self.btn_piel.setText(t["skin"])
         self.chk_sync.setText(t["sync"])
-        self.chk_comp_shadow.setText(t["auto_shadow"])
+
+        self.combo_shadow.blockSignals(True)
+        self.combo_shadow.setItemText(0, t["shadow_analog"])
+        self.combo_shadow.setItemText(1, t["shadow_comp"])
+        self.combo_shadow.setItemText(2, t["shadow_mono"])
+        self.combo_shadow.blockSignals(False)
+
         self.btn_custom_shadow.setText(t["custom_shadow"])
+        self.btn_reset_shadow.setText(t["reset_shadow"])
+        self.btn_reset_shadow.setToolTip(t["reset_tooltip"])
+
         self.btn_bounce_col.setText(t["bounce_color"])
         self.btn_auto_bounce.setText(t["auto_bounce"])
         self.lbl_rebote.setText(t["bounce_label"])
+
         self.chip_light.setText(t["light"])
-        self.chip_mid.setText(t["mid"])
+        self.chip_base.setText(t["base"])
+        self.chip_trans.setText(t["trans"])
         self.chip_shadow.setText(t["shadow"])
         self.chip_bounce.setText(t["bounce"])
         self.btn_save_pal.setToolTip(t["save_tooltip"])
+
+    def on_shadow_mode_changed(self, index):
+        mode = self.combo_shadow.itemData(index)
+        self.sphere.shadow_mode = mode
+        self.sphere.custom_shadow_color = None
+        self.btn_reset_shadow.setEnabled(False)
+        self.sphere.update()
+        self.update_live_palette()
+
+    def choose_custom_shadow(self):
+        t = TEXTS[self.lang]
+        col = QColorDialog.getColor(
+            self.sphere.get_shadow_color(), self, t["picker_title_shadow"]
+        )
+        if col.isValid():
+            self.sphere.custom_shadow_color = col
+            self.btn_reset_shadow.setEnabled(True)
+            self.sphere.update()
+            self.update_live_palette()
+
+    def reset_shadow_to_auto(self):
+        self.sphere.custom_shadow_color = None
+        self.btn_reset_shadow.setEnabled(False)
+        self.sphere.update()
+        self.update_live_palette()
 
     def save_current_material_state(self):
         mat = self.sphere.material
@@ -571,7 +680,7 @@ class LightSpherePickerDocker(DockWidget):
                 if self.sphere.custom_shadow_color
                 else None
             ),
-            "use_comp": self.sphere.use_complementary_shadow,
+            "shadow_mode": self.sphere.shadow_mode,
             "bounce": QColor(self.sphere.bounce_color),
             "intensity": self.sphere.bounce_intensity,
             "lx": self.sphere.lx,
@@ -587,15 +696,19 @@ class LightSpherePickerDocker(DockWidget):
         self.sphere.custom_shadow_color = (
             QColor(data["shadow"]) if data["shadow"] else None
         )
-        self.sphere.use_complementary_shadow = data["use_comp"]
+        self.sphere.shadow_mode = data.get("shadow_mode", "analoga")
         self.sphere.bounce_color = QColor(data["bounce"])
         self.sphere.bounce_intensity = data["intensity"]
         self.sphere.lx = data["lx"]
         self.sphere.ly = data["ly"]
 
-        self.chk_comp_shadow.blockSignals(True)
-        self.chk_comp_shadow.setChecked(data["use_comp"])
-        self.chk_comp_shadow.blockSignals(False)
+        idx = self.combo_shadow.findData(self.sphere.shadow_mode)
+        if idx >= 0:
+            self.combo_shadow.blockSignals(True)
+            self.combo_shadow.setCurrentIndex(idx)
+            self.combo_shadow.blockSignals(False)
+
+        self.btn_reset_shadow.setEnabled(bool(self.sphere.custom_shadow_color))
 
         self.slider_bounce.blockSignals(True)
         self.slider_bounce.setValue(data["intensity"])
@@ -603,23 +716,6 @@ class LightSpherePickerDocker(DockWidget):
 
         self.sphere.update()
         self.update_live_palette()
-
-    def on_toggle_comp_shadow(self, checked):
-        self.sphere.use_complementary_shadow = checked
-        self.sphere.update()
-        self.update_live_palette()
-
-    def choose_custom_shadow(self):
-        t = TEXTS[self.lang]
-        col = QColorDialog.getColor(
-            self.sphere.get_shadow_color(), self, t["picker_title_shadow"]
-        )
-        if col.isValid():
-            self.sphere.custom_shadow_color = col
-            self.sphere.use_complementary_shadow = False
-            self.chk_comp_shadow.setChecked(False)
-            self.sphere.update()
-            self.update_live_palette()
 
     def choose_bounce_color(self):
         t = TEXTS[self.lang]
@@ -644,17 +740,19 @@ class LightSpherePickerDocker(DockWidget):
         self.update_live_palette()
 
     def update_live_palette(self):
-        self.col_lit = self.sphere.base_color.lighter(135)
-        self.col_mid = self.sphere.base_color
+        self.col_lit = self.sphere.base_color.lighter(130)
+        self.col_base = self.sphere.base_color
+        self.col_trans = self.sphere.get_transition_color()
         self.col_shadow = self.sphere.get_shadow_color()
         self.col_bounce = self.sphere.bounce_color
 
         def style_for(c):
             txt = "#000" if c.value() > 160 else "#FFF"
-            return f"background-color: {c.name()}; color: {txt}; border: 1px solid #111; border-radius: 3px; font-weight: bold; font-size: 10px;"
+            return f"background-color: {c.name()}; color: {txt}; border: 1px solid #111; border-radius: 3px; font-weight: bold; font-size: 9px;"
 
         self.chip_light.setStyleSheet(style_for(self.col_lit))
-        self.chip_mid.setStyleSheet(style_for(self.col_mid))
+        self.chip_base.setStyleSheet(style_for(self.col_base))
+        self.chip_trans.setStyleSheet(style_for(self.col_trans))
         self.chip_shadow.setStyleSheet(style_for(self.col_shadow))
         self.chip_bounce.setStyleSheet(style_for(self.col_bounce))
 
@@ -669,16 +767,22 @@ class LightSpherePickerDocker(DockWidget):
             view.setForeGroundColor(mc)
 
     def save_current_palette_to_history(self):
-        for col in [self.col_lit, self.col_mid, self.col_shadow]:
+        for col in [
+            self.col_lit,
+            self.col_base,
+            self.col_trans,
+            self.col_shadow,
+            self.col_bounce,
+        ]:
             dot = QPushButton()
-            dot.setFixedSize(16, 16)
+            dot.setFixedSize(14, 14)
             dot.setStyleSheet(
                 f"background-color: {col.name()}; border-radius: 2px; border: 1px solid #111;"
             )
             dot.clicked.connect(lambda _, c=col: self.send_to_krita(c))
             self.history_layout.addWidget(dot)
 
-        while self.history_layout.count() > 12:
+        while self.history_layout.count() > 15:
             item = self.history_layout.takeAt(0)
             if item.widget():
                 item.widget().deleteLater()
