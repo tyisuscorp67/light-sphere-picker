@@ -17,4 +17,4 @@ An interactive 3D lit sphere docker plugin for Krita to study values, lighting, 
 3. Restart Krita.
 4. Enable the docker from: `Settings > Dockers > Light Sphere` (or *Esfera de Luz*).
 
-[![preview](https://youtu.be/7xN74SC2W9o)](https://youtu.be/7xN74SC2W9o)
+[![preview](https://youtu.be/LMBDB4LTDBo)](https://youtu.be/LMBDB4LTDBo)
